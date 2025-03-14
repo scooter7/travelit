@@ -245,91 +245,52 @@ if st.button("Generate Itinerary & Flight Offers"):
                 st.json(e.response)
 
 # -----------------------------------------------------------------------------
-# 5. Hotel Search Section (Two Approaches: By City or By Hotel ID)
+# 5. Hotel Search (City-Based Only)
 # -----------------------------------------------------------------------------
-st.subheader("Hotel Search")
+st.subheader("Hotel Search (City-Based)")
 
-# --- A) Search Hotels by City ---
-with st.expander("Search for Hotels by City"):
-    hotel_input = st.text_input("Hotel City (e.g. 'San Francisco' or 'SFO')", "San Francisco")
-    check_in = st.date_input("Check-In Date", date.today())
-    check_out = st.date_input("Check-Out Date", date.today())
-    adults = st.number_input("Number of Adults", min_value=1, value=2)
-    room_quantity = st.number_input("Number of Rooms", min_value=1, value=1)
+hotel_input = st.text_input("Hotel City (e.g. 'San Francisco' or 'SFO')", "San Francisco")
+check_in = st.date_input("Check-In Date", date.today())
+check_out = st.date_input("Check-Out Date", date.today())
+adults = st.number_input("Number of Adults", min_value=1, value=2)
+room_quantity = st.number_input("Number of Rooms", min_value=1, value=1)
 
-    if st.button("Search Hotels (by City)"):
-        with st.spinner("Searching for hotels by city..."):
-            # Convert user city name to a city code
-            hotel_city_code = get_iata_code(amadeus, hotel_input, sub_type="CITY")
-            if not hotel_city_code:
-                st.error(f"Could not find a valid IATA code for hotel city: {hotel_input}")
-                st.stop()
+if st.button("Search Hotels by City"):
+    with st.spinner("Searching for hotels by city..."):
+        # Convert user city name to a city code
+        hotel_city_code = get_iata_code(amadeus, hotel_input, sub_type="CITY")
+        if not hotel_city_code:
+            st.error(f"Could not find a valid IATA code for hotel city: {hotel_input}")
+            st.stop()
 
-            try:
-                search_response = amadeus.shopping.hotel_offers_search.get(
-                    cityCode=hotel_city_code.upper(),
-                    checkInDate=check_in.strftime("%Y-%m-%d"),
-                    checkOutDate=check_out.strftime("%Y-%m-%d"),
-                    adults=adults,
-                    roomQuantity=room_quantity,
-                    radius="5",
-                    radiusUnit="KM",
-                    paymentPolicy="NONE",
-                    includeClosed="false",
-                    bestRateOnly="true",
-                    view="FULL",
-                    sort="PRICE"
-                )
-                if search_response.data:
-                    df, offer_map = parse_hotel_offers(search_response.data)
-                    st.dataframe(df)
-                    # Store in session state for booking
-                    st.session_state["hotel_offers_df"] = df
-                    st.session_state["hotel_offers_map"] = offer_map
-                else:
-                    st.warning("No hotel offers found. Try adjusting your search parameters.")
-            except ResponseError as e:
-                st.error(f"Hotel search error: {e}")
-                if hasattr(e, "response"):
-                    st.write("Full error response:")
-                    st.json(e.response)
-
-# --- B) Search Hotels by Specific Hotel IDs ---
-with st.expander("Search for Hotels by ID"):
-    st.write("Enter one or more Hotel IDs (comma-separated). Example: `RTPAR001` for a specific hotel in Paris.")
-    hotel_ids_input = st.text_input("Hotel IDs", "RTPAR001")
-    check_in_id = st.date_input("Check-In Date (Hotel ID)", date.today())
-    check_out_id = st.date_input("Check-Out Date (Hotel ID)", date.today())
-    adults_id = st.number_input("Number of Adults (Hotel ID)", min_value=1, value=2)
-
-    if st.button("Search Hotels (by ID)"):
-        with st.spinner("Searching for hotels by ID..."):
-            # Sanitize user input
-            hotel_ids_clean = sanitize_place_name(hotel_ids_input)
-            # Convert comma-separated IDs into a single string with commas
-            # (Amadeus supports multiple IDs, e.g. 'RTPAR001,RTXXXX02')
-            hotel_ids_clean = ",".join([x.strip() for x in hotel_ids_clean.split(",") if x.strip()])
-
-            try:
-                search_response = amadeus.shopping.hotel_offers_search.get(
-                    hotelIds=hotel_ids_clean,
-                    adults=str(adults_id),
-                    checkInDate=check_in_id.strftime("%Y-%m-%d"),
-                    checkOutDate=check_out_id.strftime("%Y-%m-%d"),
-                    view="FULL"
-                )
-                if search_response.data:
-                    df, offer_map = parse_hotel_offers(search_response.data)
-                    st.dataframe(df)
-                    st.session_state["hotel_offers_df"] = df
-                    st.session_state["hotel_offers_map"] = offer_map
-                else:
-                    st.warning("No hotel offers found. Check your Hotel ID(s) or date range.")
-            except ResponseError as e:
-                st.error(f"Hotel search (by ID) error: {e}")
-                if hasattr(e, "response"):
-                    st.write("Full error response:")
-                    st.json(e.response)
+        try:
+            search_response = amadeus.shopping.hotel_offers_search.get(
+                cityCode=hotel_city_code.upper(),
+                checkInDate=check_in.strftime("%Y-%m-%d"),
+                checkOutDate=check_out.strftime("%Y-%m-%d"),
+                adults=adults,
+                roomQuantity=room_quantity,
+                radius="5",
+                radiusUnit="KM",
+                paymentPolicy="NONE",
+                includeClosed="false",
+                bestRateOnly="true",
+                view="FULL",
+                sort="PRICE"
+            )
+            if search_response.data:
+                df, offer_map = parse_hotel_offers(search_response.data)
+                st.dataframe(df)
+                # Store in session state for booking
+                st.session_state["hotel_offers_df"] = df
+                st.session_state["hotel_offers_map"] = offer_map
+            else:
+                st.warning("No hotel offers found. Try adjusting your search parameters.")
+        except ResponseError as e:
+            st.error(f"Hotel search error: {e}")
+            if hasattr(e, "response"):
+                st.write("Full error response:")
+                st.json(e.response)
 
 # -----------------------------------------------------------------------------
 # 6. Hotel Booking Section
@@ -337,7 +298,7 @@ with st.expander("Search for Hotels by ID"):
 st.subheader("Hotel Booking")
 with st.expander("Book a Hotel Offer"):
     if "hotel_offers_df" not in st.session_state:
-        st.info("Please search for hotels first (by city or by ID).")
+        st.info("Please search for hotels by city first.")
     else:
         df = st.session_state["hotel_offers_df"]
         offer_map = st.session_state["hotel_offers_map"]
