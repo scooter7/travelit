@@ -153,7 +153,37 @@ def book_hotel_offer(offer_id, traveler_info, payment_info):
         return {"error": str(e)}
 
 # -----------------------------------------------------------------------------
-# 3. AGNO Agents (Researcher & Planner)
+# 3. The New search_hotels_by_city(...) Function
+# -----------------------------------------------------------------------------
+def search_hotels_by_city(city_code: str, check_in: str, check_out: str, adults: int, room_quantity: int = 1):
+    """
+    Safely searches hotels by cityCode using amadeus.shopping.hotel_offers_search.get.
+    This function returns the raw 'data' from the Amadeus response (or None on error).
+    """
+    try:
+        response = amadeus.shopping.hotel_offers_search.get(
+            cityCode=city_code.upper(),
+            checkInDate=check_in,
+            checkOutDate=check_out,
+            adults=adults,
+            roomQuantity=room_quantity,
+            radius="5",
+            radiusUnit="KM",
+            paymentPolicy="NONE",
+            includeClosed="false",
+            bestRateOnly="true",
+            view="FULL",
+            sort="PRICE"
+        )
+        return response.data
+    except ResponseError as e:
+        print("Error:", e)
+        if hasattr(e, "response"):
+            print("Error Response:", e.response)
+        return None
+
+# -----------------------------------------------------------------------------
+# 4. AGNO Agents (Researcher & Planner)
 # -----------------------------------------------------------------------------
 researcher = Agent(
     name="Researcher",
@@ -198,7 +228,7 @@ planner = Agent(
 )
 
 # -----------------------------------------------------------------------------
-# 4. GPT Itinerary & Flight Search Section
+# 5. GPT Itinerary & Flight Search Section
 # -----------------------------------------------------------------------------
 st.subheader("GPT-4o Itinerary & Flight Offers")
 destination_input = st.text_input("Destination (City Name)", "San Francisco")
@@ -245,7 +275,7 @@ if st.button("Generate Itinerary & Flight Offers"):
                 st.json(e.response)
 
 # -----------------------------------------------------------------------------
-# 5. Hotel Search (City-Based Only)
+# 6. Hotel Search (City-Based) using the new function
 # -----------------------------------------------------------------------------
 st.subheader("Hotel Search (City-Based)")
 
@@ -263,37 +293,27 @@ if st.button("Search Hotels by City"):
             st.error(f"Could not find a valid IATA code for hotel city: {hotel_input}")
             st.stop()
 
-        try:
-            search_response = amadeus.shopping.hotel_offers_search.get(
-                cityCode=hotel_city_code.upper(),
-                checkInDate=check_in.strftime("%Y-%m-%d"),
-                checkOutDate=check_out.strftime("%Y-%m-%d"),
-                adults=adults,
-                roomQuantity=room_quantity,
-                radius="5",
-                radiusUnit="KM",
-                paymentPolicy="NONE",
-                includeClosed="false",
-                bestRateOnly="true",
-                view="FULL",
-                sort="PRICE"
-            )
-            if search_response.data:
-                df, offer_map = parse_hotel_offers(search_response.data)
-                st.dataframe(df)
-                # Store in session state for booking
-                st.session_state["hotel_offers_df"] = df
-                st.session_state["hotel_offers_map"] = offer_map
-            else:
-                st.warning("No hotel offers found. Try adjusting your search parameters.")
-        except ResponseError as e:
-            st.error(f"Hotel search error: {e}")
-            if hasattr(e, "response"):
-                st.write("Full error response:")
-                st.json(e.response)
+        # Use our new search_hotels_by_city function
+        search_response_data = search_hotels_by_city(
+            city_code=hotel_city_code,
+            check_in=check_in.strftime("%Y-%m-%d"),
+            check_out=check_out.strftime("%Y-%m-%d"),
+            adults=adults,
+            room_quantity=room_quantity
+        )
+
+        # Now parse and display
+        if search_response_data:
+            df, offer_map = parse_hotel_offers(search_response_data)
+            st.dataframe(df)
+            # Store in session state for booking
+            st.session_state["hotel_offers_df"] = df
+            st.session_state["hotel_offers_map"] = offer_map
+        else:
+            st.warning("No hotel offers found. Try adjusting your search parameters.")
 
 # -----------------------------------------------------------------------------
-# 6. Hotel Booking Section
+# 7. Hotel Booking Section
 # -----------------------------------------------------------------------------
 st.subheader("Hotel Booking")
 with st.expander("Book a Hotel Offer"):
