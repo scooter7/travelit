@@ -31,18 +31,39 @@ amadeus = Client(
 )
 
 # -----------------------------------------------------------------------------
-# 2. Helper Functions for Parsing Flight & Hotel Offers
+# 2. Helper Functions
 # -----------------------------------------------------------------------------
+def get_iata_code(amadeus_client: Client, place_name: str, sub_type: str = "CITY") -> str:
+    """
+    Uses the Amadeus Locations API to transform a user-input place name 
+    into an IATA code. By default, sub_type="CITY" is used for hotel searches.
+    For flight origin/destination, you can pass sub_type="AIRPORT" or "AIRPORT,CITY".
+    """
+    try:
+        # Attempt to retrieve an IATA code from the place name
+        response = amadeus_client.reference_data.locations.get(
+            keyword=place_name,
+            subType=sub_type,
+            view="LIGHT"
+        )
+        # If there's at least one match, return its iataCode
+        if response.data and len(response.data) > 0:
+            return response.data[0].get("iataCode", place_name[:3].upper())
+        else:
+            # Fallback: slice the place name
+            return place_name[:3].upper()
+    except Exception as e:
+        # Fallback if the API call fails
+        return place_name[:3].upper()
+
+
 def parse_flight_offers(flight_offers_data):
     """
     Convert flight offers JSON data into a user-friendly DataFrame.
     """
     flight_rows = []
     for offer in flight_offers_data:
-        # Price info is typically in offer["price"]["total"]
         total_price = offer.get("price", {}).get("total", "N/A")
-        
-        # 'itineraries' holds the flight segments
         itineraries = offer.get("itineraries", [])
         for itinerary in itineraries:
             segments = itinerary.get("segments", [])
@@ -175,24 +196,27 @@ planner = Agent(
 # 4. GPT Itinerary & Flight Search Section
 # -----------------------------------------------------------------------------
 st.subheader("GPT-4o Itinerary & Flight Offers")
-destination = st.text_input("Destination (City Name)", "San Francisco")
-origin = st.text_input("Departure Airport Code (e.g. JFK)", "JFK")
+destination_input = st.text_input("Destination (City Name)", "San Francisco")
+origin_input = st.text_input("Departure (City Name or Airport)", "New York")
 departure_date = st.date_input("Departure Date", date.today())
 num_days = st.number_input("Trip Length (Days)", min_value=1, max_value=30, value=5)
 
 if st.button("Generate Itinerary & Flight Offers"):
     with st.spinner("Processing..."):
         # 4A) Generate itinerary with GPT-based planner
-        itinerary_response = planner.run(f"{destination} for {num_days} days", stream=False)
+        itinerary_response = planner.run(f"{destination_input} for {num_days} days", stream=False)
         st.markdown("### Draft Itinerary")
         st.write(itinerary_response.content)
 
-        # 4B) Flight Offers via Amadeus
+        # 4B) Transform city/airport names to IATA codes for flights
+        origin_code = get_iata_code(amadeus, origin_input, sub_type="AIRPORT,CITY")
+        destination_code = get_iata_code(amadeus, destination_input, sub_type="AIRPORT,CITY")
+
+        # 4C) Flight Offers via Amadeus
         try:
             flight_offers = amadeus.shopping.flight_offers_search.get(
-                originLocationCode=origin.upper(),
-                # WARNING: In production, you must map the city name to a valid IATA code
-                destinationLocationCode=destination[:3].upper(),
+                originLocationCode=origin_code.upper(),
+                destinationLocationCode=destination_code.upper(),
                 departureDate=departure_date.strftime("%Y-%m-%d"),
                 adults=1
             )
@@ -204,13 +228,16 @@ if st.button("Generate Itinerary & Flight Offers"):
                 st.warning("No flight offers found. Try different parameters or a valid city/airport code.")
         except ResponseError as e:
             st.error(f"Error fetching flight offers: {e}")
+            # Display more details if needed
+            st.write("Full error response:")
+            st.json(e.response)
 
 # -----------------------------------------------------------------------------
 # 5. Hotel Search Section
 # -----------------------------------------------------------------------------
 st.subheader("Hotel Search")
 with st.expander("Search for Hotels"):
-    hotel_city_code = st.text_input("Hotel City Code (e.g. SFO)", "SFO")
+    hotel_input = st.text_input("Hotel City (e.g. 'San Francisco' or 'SFO')", "San Francisco")
     check_in = st.date_input("Check-In Date", date.today())
     check_out = st.date_input("Check-Out Date", date.today())
     adults = st.number_input("Number of Adults", min_value=1, value=2)
@@ -218,6 +245,8 @@ with st.expander("Search for Hotels"):
 
     if st.button("Search Hotels"):
         with st.spinner("Searching for hotels..."):
+            # Convert user city name to a city code
+            hotel_city_code = get_iata_code(amadeus, hotel_input, sub_type="CITY")
             try:
                 search_response = amadeus.shopping.hotel_offers_search.get(
                     cityCode=hotel_city_code.upper(),
@@ -242,6 +271,8 @@ with st.expander("Search for Hotels"):
                     st.warning("No hotel offers found. Try adjusting your search parameters.")
             except ResponseError as e:
                 st.error(f"Hotel search error: {e}")
+                st.write("Full error response:")
+                st.json(e.response)
 
 # -----------------------------------------------------------------------------
 # 6. Hotel Booking Section
@@ -272,7 +303,6 @@ with st.expander("Book a Hotel Offer"):
         expiry_date = st.text_input("Expiry Date (YYYY-MM)", "2025-08")
 
         if st.button("Book Selected Hotel Offer"):
-            # Prepare traveler and payment dicts
             traveler_info = {
                 "id": 1,
                 "name": {
