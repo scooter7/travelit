@@ -93,7 +93,7 @@ if st.button("Generate Itinerary & Offers"):
         
         # Fetch hotel offers from Amadeus (example using a city code, adjust as necessary)
         try:
-            hotel_offers = amadeus.shopping.hotel_offers.get(
+            hotel_offers = amadeus.shopping.hotel_offers_search.get(
                 cityCode=destination[:3].upper()  # Again, ensure you provide a valid city code
             )
             st.subheader("Hotel Offers")
