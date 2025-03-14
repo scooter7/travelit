@@ -1,13 +1,22 @@
-from textwrap import dedent
 import streamlit as st
+import pandas as pd
+from datetime import date
+from textwrap import dedent
 from amadeus import Client, ResponseError
+
+# AGNO imports (adjust to your actual package structure & versions)
 from agno.agent import Agent
 from agno.tools.serpapi import SerpApiTools
 from agno.models.openai import OpenAIChat
 
-# Set up the Streamlit app
+# ---------------------------
+# Streamlit App Configuration
+# ---------------------------
 st.title("AI Travel Planner ✈️")
-st.caption("Plan your next adventure with AI Travel Planner by researching and planning a personalized itinerary on autopilot using GPT-4o and Amadeus for real-time travel data.")
+st.caption(
+    "Plan your next adventure with AI Travel Planner by researching and planning "
+    "a personalized itinerary on autopilot using GPT-4o and Amadeus for real-time travel data."
+)
 
 # Retrieve API keys and Amadeus credentials from Streamlit secrets
 openai_api_key = st.secrets["openai"]["api_key"]
@@ -15,13 +24,84 @@ serp_api_key = st.secrets["serpapi"]["api_key"]
 amadeus_client_id = st.secrets["amadeus"]["client_id"]
 amadeus_client_secret = st.secrets["amadeus"]["client_secret"]
 
-# Initialize Amadeus client
+# ------------------
+# Amadeus Client Init
+# ------------------
 amadeus = Client(
     client_id=amadeus_client_id,
     client_secret=amadeus_client_secret
 )
 
-# Initialize the Researcher agent for travel research
+# -----------------------------
+# Define Parsing Helper Functions
+# -----------------------------
+def parse_flight_offers(flight_offers_data):
+    """
+    Convert flight offers JSON data into a user-friendly DataFrame.
+    """
+    flight_rows = []
+    for offer in flight_offers_data:
+        # Price info is usually in offer["price"]["total"]
+        total_price = offer.get("price", {}).get("total", "N/A")
+        
+        # 'itineraries' holds the flight segments info
+        itineraries = offer.get("itineraries", [])
+        for itinerary in itineraries:
+            segments = itinerary.get("segments", [])
+            for segment in segments:
+                # Extract relevant segment information
+                carrier_code = segment.get("carrierCode", "N/A")
+                departure = segment.get("departure", {})
+                arrival = segment.get("arrival", {})
+
+                departure_airport = departure.get("iataCode", "N/A")
+                departure_time = departure.get("at", "N/A")
+                arrival_airport = arrival.get("iataCode", "N/A")
+                arrival_time = arrival.get("at", "N/A")
+
+                flight_rows.append({
+                    "Airline": carrier_code,
+                    "Departure Airport": departure_airport,
+                    "Departure Time": departure_time,
+                    "Arrival Airport": arrival_airport,
+                    "Arrival Time": arrival_time,
+                    "Total Price": total_price
+                })
+
+    return pd.DataFrame(flight_rows)
+
+
+def parse_hotel_offers(hotel_offers_data):
+    """
+    Convert hotel offers JSON data into a user-friendly DataFrame.
+    """
+    hotel_rows = []
+    for offer in hotel_offers_data:
+        # Example: top-level fields might include 'hotel' and 'offers'
+        hotel_info = offer.get("hotel", {})
+        hotel_name = hotel_info.get("name", "N/A")
+        hotel_city = hotel_info.get("cityCode", "N/A")
+
+        # 'offers' may be a list of different room/rate options
+        offers_list = offer.get("offers", [])
+        for room_offer in offers_list:
+            room_type = room_offer.get("room", {}).get("type", "N/A")
+            room_description = room_offer.get("room", {}).get("description", {}).get("text", "N/A")
+            price = room_offer.get("price", {}).get("total", "N/A")
+
+            hotel_rows.append({
+                "Hotel Name": hotel_name,
+                "City Code": hotel_city,
+                "Room Type": room_type,
+                "Room Description": room_description,
+                "Price (Total)": price
+            })
+
+    return pd.DataFrame(hotel_rows)
+
+# -----------------------------
+# AGNO Agents (Researcher & Planner)
+# -----------------------------
 researcher = Agent(
     name="Researcher",
     role="Searches for travel destinations, activities, and accommodations based on user preferences",
@@ -43,7 +123,6 @@ researcher = Agent(
     add_datetime_to_instructions=True,
 )
 
-# Initialize the Planner agent for itinerary planning
 planner = Agent(
     name="Planner",
     role="Generates a draft itinerary based on user preferences and research results",
@@ -65,38 +144,47 @@ planner = Agent(
     add_datetime_to_instructions=True,
 )
 
-# Input fields for the user's destination and travel dates
+# -----------------------------
+# Streamlit UI Inputs
+# -----------------------------
 destination = st.text_input("Where do you want to go?")
 origin = st.text_input("Enter your departure airport IATA code (e.g., JFK)")
-departure_date = st.date_input("Select your departure date")
+departure_date = st.date_input("Select your departure date", date.today())
 num_days = st.number_input("How many days do you want to travel for?", min_value=1, max_value=30, value=7)
 
+# -----------------------------
+# Main Button / Action
+# -----------------------------
 if st.button("Generate Itinerary & Offers"):
     with st.spinner("Processing..."):
-        # Get the itinerary using the Planner agent
+        # 1) Generate a draft itinerary using Planner
         itinerary_response = planner.run(f"{destination} for {num_days} days", stream=False)
         st.subheader("Draft Itinerary")
         st.write(itinerary_response.content)
-        
-        # Fetch real-time flight offers from Amadeus
+
+        # 2) Fetch real-time flight offers from Amadeus
         try:
             flight_offers = amadeus.shopping.flight_offers_search.get(
                 originLocationCode=origin.upper(),
-                destinationLocationCode=destination[:3].upper(),  # This is a placeholder: ensure you provide the correct IATA code for the destination
+                # NOTE: In production, you should map the city name to a valid IATA code (e.g. "SFO")
+                destinationLocationCode=destination[:3].upper(),
                 departureDate=departure_date.strftime("%Y-%m-%d"),
                 adults=1
             )
-            st.subheader("Flight Offers")
-            st.write(flight_offers.data)
+            flight_df = parse_flight_offers(flight_offers.data)
+            st.subheader("Flight Offers (Parsed)")
+            st.dataframe(flight_df)
         except ResponseError as error:
             st.error(f"Error fetching flight offers: {error}")
-        
-        # Fetch hotel offers from Amadeus (example using a city code, adjust as necessary)
+
+        # 3) Fetch hotel offers from Amadeus
         try:
             hotel_offers = amadeus.shopping.hotel_offers_search.get(
-                cityCode=destination[:3].upper()  # Again, ensure you provide a valid city code
+                # NOTE: You must provide a valid city code, not just the first 3 letters of a city name
+                cityCode=destination[:3].upper()
             )
-            st.subheader("Hotel Offers")
-            st.write(hotel_offers.data)
+            hotel_df = parse_hotel_offers(hotel_offers.data)
+            st.subheader("Hotel Offers (Parsed)")
+            st.dataframe(hotel_df)
         except ResponseError as error:
             st.error(f"Error fetching hotel offers: {error}")
