@@ -31,30 +31,41 @@ amadeus = Client(
 )
 
 # -----------------------------------------------------------------------------
-# 2. Helper Functions
+# 2. Helper Functions (City/Airport Code, Parsing, Booking)
 # -----------------------------------------------------------------------------
-def get_iata_code(amadeus_client: Client, place_name: str, sub_type: str = "CITY") -> str:
+def get_iata_code(amadeus_client: Client, place_name: str, sub_type: str = "CITY,AIRPORT") -> str:
     """
-    Uses the Amadeus Locations API to transform a user-input place name 
-    into an IATA code. By default, sub_type="CITY" is used for hotel searches.
-    For flight origin/destination, you can pass sub_type="AIRPORT" or "AIRPORT,CITY".
+    Safely transform a user-input place name into an IATA code using Amadeus.
+    1) Sanitizes user input (removes quotes, trims whitespace).
+    2) Calls reference_data.locations.get(...) with sub_type="CITY,AIRPORT" by default.
+    3) Returns the first matched IATA code, or None if none found.
     """
+    # 1. Basic input cleanup (remove quotes, trim whitespace)
+    place_name_clean = place_name.strip().replace('"', '').replace("'", '')
+
+    # 2. Handle empty input
+    if not place_name_clean:
+        return None
+
+    # 3. Try the location API call
     try:
-        # Attempt to retrieve an IATA code from the place name
         response = amadeus_client.reference_data.locations.get(
-            keyword=place_name,
-            subType=sub_type,
-            view="LIGHT"
+            keyword=place_name_clean,
+            subType=sub_type
         )
-        # If there's at least one match, return its iataCode
+        # 4. Check if we got at least one match
         if response.data and len(response.data) > 0:
-            return response.data[0].get("iataCode", place_name[:3].upper())
+            return response.data[0].get("iataCode", None)
         else:
-            # Fallback: slice the place name
-            return place_name[:3].upper()
-    except Exception as e:
-        # Fallback if the API call fails
-        return place_name[:3].upper()
+            return None
+    except ResponseError as e:
+        # Log or display the full error for debugging
+        print(f"Location lookup error: {e}")
+        return None
+    except Exception as ex:
+        # Catch-all for any other error
+        print(f"Unexpected error in get_iata_code: {ex}")
+        return None
 
 
 def parse_flight_offers(flight_offers_data):
@@ -208,9 +219,16 @@ if st.button("Generate Itinerary & Flight Offers"):
         st.markdown("### Draft Itinerary")
         st.write(itinerary_response.content)
 
-        # 4B) Transform city/airport names to IATA codes for flights
-        origin_code = get_iata_code(amadeus, origin_input, sub_type="AIRPORT,CITY")
-        destination_code = get_iata_code(amadeus, destination_input, sub_type="AIRPORT,CITY")
+        # 4B) Transform city/airport names to IATA codes for flights (with input sanitization)
+        origin_code = get_iata_code(amadeus, origin_input, sub_type="CITY,AIRPORT")
+        if not origin_code:
+            st.error(f"Could not find a valid IATA code for origin: {origin_input}")
+            st.stop()
+
+        destination_code = get_iata_code(amadeus, destination_input, sub_type="CITY,AIRPORT")
+        if not destination_code:
+            st.error(f"Could not find a valid IATA code for destination: {destination_input}")
+            st.stop()
 
         # 4C) Flight Offers via Amadeus
         try:
@@ -229,8 +247,9 @@ if st.button("Generate Itinerary & Flight Offers"):
         except ResponseError as e:
             st.error(f"Error fetching flight offers: {e}")
             # Display more details if needed
-            st.write("Full error response:")
-            st.json(e.response)
+            if hasattr(e, "response"):
+                st.write("Full error response:")
+                st.json(e.response)
 
 # -----------------------------------------------------------------------------
 # 5. Hotel Search Section
@@ -245,8 +264,12 @@ with st.expander("Search for Hotels"):
 
     if st.button("Search Hotels"):
         with st.spinner("Searching for hotels..."):
-            # Convert user city name to a city code
+            # Convert user city name to a city code (with sanitization)
             hotel_city_code = get_iata_code(amadeus, hotel_input, sub_type="CITY")
+            if not hotel_city_code:
+                st.error(f"Could not find a valid IATA code for hotel city: {hotel_input}")
+                st.stop()
+
             try:
                 search_response = amadeus.shopping.hotel_offers_search.get(
                     cityCode=hotel_city_code.upper(),
@@ -271,8 +294,9 @@ with st.expander("Search for Hotels"):
                     st.warning("No hotel offers found. Try adjusting your search parameters.")
             except ResponseError as e:
                 st.error(f"Hotel search error: {e}")
-                st.write("Full error response:")
-                st.json(e.response)
+                if hasattr(e, "response"):
+                    st.write("Full error response:")
+                    st.json(e.response)
 
 # -----------------------------------------------------------------------------
 # 6. Hotel Booking Section
